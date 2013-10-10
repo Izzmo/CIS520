@@ -504,6 +504,10 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init(&t->lock_list);
   t->magic = THREAD_MAGIC;
   oldlevel = intr_disable();
+
+  t->sleep_ticks = 0;
+  sema_init(&(t->sema), 0); //initial alarm semaphore
+
   list_push_back (&all_list, &t->allelem);
   intr_set_level(oldlevel);
 }

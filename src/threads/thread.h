@@ -98,6 +98,10 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    uint32_t sleep_ticks;
+    struct semaphore sema;
+    struct list_elem sleep_elem;
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
 
