@@ -221,14 +221,27 @@ sys_wait (tid_t child)
 static int
 sys_create (const char *ufile, unsigned initial_size) 
 {
-  return 0;
+  off_t size = (int32_t)initial_size;
+  int result = 0;
+  if(ufile != NULL && *name != NULL) {
+    lock_acquire(&fs_lock);
+    result = filesys_create(ufile, size);
+    lock_release(&fs_lock);
+  }
+  return result;
 }
  
 /* Remove system call. */
 static int
 sys_remove (const char *ufile) 
 {
-/* Add code */
+  int result = 0;
+  if(ufile != NULL && *name != NULL) {
+    lock_acquire(&fs_lock);
+    result = filesys_remove(ufile);
+    lock_release(&fs_lock);
+  }
+  return result;
 }
  
 /* A file descriptor, for binding a file handle to a file. */
@@ -423,8 +436,15 @@ sys_tell (int fd)
 static int
 sys_close (int handle) 
 {
-/* Add code */
-  thread_exit ();
+  struct file_descriptor *fd = find_fd_elem_by_fd(handle);
+  int result = 0;
+  if(fd) {
+    lock_acquire(&fs_lock);
+    file_close(fd->file);
+    free(fd);
+    lock_release(&fs_lock);
+  }
+  return result;
 }
  
 /* On thread exit, close all open files. */

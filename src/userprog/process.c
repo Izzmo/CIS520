@@ -40,28 +40,40 @@ struct exec_info
 tid_t
 process_execute (const char *file_name) 
 {
-  struct exec_info exec;
-  char thread_name[16];
-  char *save_ptr;
+  char *fn_copy, *save, *fn;
   tid_t tid;
-
-  /* Initialize exec_info. */
-  exec.file_name = file_name;
-  sema_init (&exec.load_done, 0);
-
-  /* Create a new thread to execute FILE_NAME. */
-  strlcpy (thread_name, file_name, sizeof thread_name);
-  strtok_r (thread_name, " ", &save_ptr);
-  tid = thread_create (thread_name, PRI_DEFAULT, start_process, &exec);
-  if (tid != TID_ERROR)
-    {
-      sema_down (&exec.load_done);
-      if (exec.success)
-        list_push_back (&thread_current ()->children, &exec.wait_status->elem);
-      else
-        tid = TID_ERROR;
+  struct thread *t;
+  
+  tid = TID_ERROR;
+  fn_copy = palloc_get_page (0);
+  if (fn_copy == NULL)
+    return TID_ERROR;
+  strlcpy (fn_copy, file_name, PGSIZE);
+  
+  fn = malloc (strlen (file_name) + 1);
+  if (!fn) {
+    free (fn);
+    if (tid == TID_ERROR) palloc_free_page (fn_copy); 
+  }
+  else {
+    memcpy (fn, file_name, strlen (file_name) + 1);
+    file_name = strtok_r (fn, " ", &save);
+  
+    tid = thread_create (fn, PRI_DEFAULT, start_process, fn_copy);
+    if (tid == TID_ERROR) {
+      free (fn);
+      palloc_free_page(fn_copy);
     }
-
+    else {
+      t = get_thread_by_tid (tid);
+      sema_down (&t->wait);
+      if (t->ret_status == -1)
+        tid = TID_ERROR;
+      while (t->status == THREAD_BLOCKED)
+        thread_unblock (t);
+      if (t->ret_status == -1) process_wait (t->tid);
+    }
+  }
   return tid;
 }
 
