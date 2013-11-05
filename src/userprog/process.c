@@ -21,7 +21,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmd_line, void (**eip) (void), void **esp);
-
+struct wait_status *get_wait_status(tid_t tid);
 /* Data structure shared between process_execute() in the
    invoking thread and start_process() in the newly invoked
    thread. */
@@ -139,7 +139,24 @@ release_child (struct wait_status *cs)
 int
 process_wait (tid_t child_tid) 
 {
-  return -1;
+  struct wait_status *s = get_wait_status(child_tid);
+  if(s == NULL) return -1;
+  while(s->dead.value == 0){
+	  thread_yield();
+  }
+  return s->exit_code;
+}
+
+struct wait_status *get_wait_status(tid_t t){
+	struct thread *c = thread_current();
+	struct list_elem *l;
+
+	for(l=list_begin(&c->children); l!=list_end(&c->children);l=list_next(l)){
+		struct wait_status *s;
+		s = list_entry(l,struct wait_status, elem);
+		if(s->tid == t)
+			return s;
+	}
 }
 
 /* Free the current process's resources. */
@@ -159,8 +176,8 @@ process_exit (void)
       struct wait_status *cs = cur->wait_status;
 
       /* add code */
-      printf ("%s: exit(0)\n", cur->name); // HACK all successful ;-)
-
+      printf ("%s: exit(%d)\n", cur->name,cur->wait_status->exit_code); // HACK all successful ;-)
+	  sema_up(&cur->wait_status->dead);
       release_child (cs);
     }
 

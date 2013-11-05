@@ -59,8 +59,49 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED)
 {
-  printf ("system call!\n");
-  thread_exit ();
+typedef int syscall_function (int, int, int);
+
+  
+  struct syscall 
+    {
+      size_t arg_cnt;           
+      syscall_function *func;   
+    };
+
+  static const struct syscall syscall_table[] =
+    {
+      {0, (syscall_function *) sys_halt},
+      {1, (syscall_function *) sys_exit},
+      {1, (syscall_function *) sys_exec},
+      {1, (syscall_function *) sys_wait},
+      {2, (syscall_function *) sys_create},
+      {1, (syscall_function *) sys_remove},
+      {1, (syscall_function *) sys_open},
+      {1, (syscall_function *) sys_filesize},
+      {3, (syscall_function *) sys_read},
+      {3, (syscall_function *) sys_write},
+      {2, (syscall_function *) sys_seek},
+      {1, (syscall_function *) sys_tell},
+      {1, (syscall_function *) sys_close},
+    };
+
+  const struct syscall *sc;
+  unsigned calln;
+  int args[3];
+
+  /* Get the system call. */
+  copy_in (&calln, f->esp, sizeof calln);
+  if (calln >= sizeof syscall_table / sizeof *syscall_table)
+    thread_exit ();
+  sc = syscall_table + calln;
+
+  /* Get the system call arguments. */
+  ASSERT (sc->arg_cnt <= sizeof args / sizeof *args);
+  memset (args, 0, sizeof args);
+  copy_in (args, (uint32_t *) f->esp + 1, sizeof *args * sc->arg_cnt);
+
+
+  f->eax = sc->func (args[0], args[1], args[2]);
 }
 
 /* Returns true if UADDR is a valid, mapped user address,
@@ -159,16 +200,21 @@ sys_exit (int exit_code)
 static int
 sys_exec (const char *ufile) 
 {
-/* Add code */
-  thread_exit ();
+	tid_t i;
+	char *f = copy_in_string(ufile);
+
+	lock_acquire(&fs_lock);
+	i=process_execute(ufile);
+	lock_release(&fs_lock);
+	palloc_free_page(f);
+	return i;
 }
  
 /* Wait system call. */
 static int
 sys_wait (tid_t child) 
 {
-/* Add code */
-  thread_exit ();
+ return process_wait(child);
 }
  
 /* Create system call. */
@@ -227,7 +273,15 @@ sys_open (const char *ufile)
 static struct file_descriptor *
 lookup_fd (int handle)
 {
-/* Add code to lookup file descriptor in the current thread's fds */
+struct thread *ct = thread_current();
+struct list_elem *l;
+
+for(l=list_begin(&ct->fds); l!=list_end(&ct->fds); l=list_next(l)){
+	struct file_descriptor *fd;
+	fd = list_entry(l, struct file_descriptor, elem);
+	if(fd->handle == handle)
+		return fd;
+}
   thread_exit ();
 }
  
@@ -235,8 +289,14 @@ lookup_fd (int handle)
 static int
 sys_filesize (int handle) 
 {
-/* Add code */
-  thread_exit ();
+  struct file_descriptor *fd = lookup_fd(handle);
+  int s;
+  lock_acquire(&fs_lock);
+  s = file_length(fd->file);
+  lock_release(&fs_lock);
+
+  return s;
+  
 }
  
 /* Read system call. */
@@ -371,6 +431,20 @@ sys_close (int handle)
 void
 syscall_exit (void) 
 {
-/* Add code */
+  struct thread *cur = thread_current ();
+  struct list_elem *e, *next;
+
+  lock_acquire (&fs_lock);
+
+  for (e = list_begin (&cur->fds); e != list_end (&cur->fds); e = next)
+    {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+    file_close (fd->file);
+    next = list_remove (e);
+    free (fd);
+    }
+
+  lock_release (&fs_lock);
+
   return;
 }
