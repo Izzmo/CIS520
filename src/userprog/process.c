@@ -40,40 +40,28 @@ struct exec_info
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy, *save, *fn;
+  struct exec_info exec;
+  char thread_name[16];
+  char *save_ptr;
   tid_t tid;
-  struct thread *t;
-  
-  tid = TID_ERROR;
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
-    return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
-  
-  fn = malloc (strlen (file_name) + 1);
-  if (!fn) {
-    free (fn);
-    if (tid == TID_ERROR) palloc_free_page (fn_copy); 
-  }
-  else {
-    memcpy (fn, file_name, strlen (file_name) + 1);
-    file_name = strtok_r (fn, " ", &save);
-  
-    tid = thread_create (fn, PRI_DEFAULT, start_process, fn_copy);
-    if (tid == TID_ERROR) {
-      free (fn);
-      palloc_free_page(fn_copy);
-    }
-    else {
-      t = get_thread_by_tid (tid);
-      sema_down (&t->wait);
-      if (t->ret_status == -1)
+
+  /* Initialize exec_info. */
+  exec.file_name = file_name;
+  sema_init (&exec.load_done, 0);
+
+  /* Create a new thread to execute FILE_NAME. */
+  strlcpy (thread_name, file_name, sizeof thread_name);
+  strtok_r (thread_name, " ", &save_ptr);
+  tid = thread_create (thread_name, PRI_DEFAULT, start_process, &exec);
+  if (tid != TID_ERROR)
+    {
+      sema_down (&exec.load_done);
+      if (exec.success)
+        list_push_back (&thread_current ()->children, &exec.wait_status->elem);
+      else
         tid = TID_ERROR;
-      while (t->status == THREAD_BLOCKED)
-        thread_unblock (t);
-      if (t->ret_status == -1) process_wait (t->tid);
     }
-  }
+
   return tid;
 }
 
@@ -85,6 +73,18 @@ start_process (void *exec_)
   struct exec_info *exec = exec_;
   struct intr_frame if_;
   bool success;
+  
+  int argc = 0;
+  char *argv[128], // array of arguments, max size of 128
+       *argPtr,
+       *arg = strtok_r(exec->file_name, " ", &argPtr);
+  while(arg != NULL) {
+    argv[argc++] = arg;
+    arg = strtok_r(NULL, " ", &argPtr);
+  }
+  // copy into stack
+  memset(&if_, 0, 16);
+  memcpy(&if_, exec->file_name, 16);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);

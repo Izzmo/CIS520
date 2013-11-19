@@ -223,7 +223,7 @@ sys_create (const char *ufile, unsigned initial_size)
 {
   off_t size = (int32_t)initial_size;
   int result = 0;
-  if(ufile != NULL && *name != NULL) {
+  if(ufile != NULL) {
     lock_acquire(&fs_lock);
     result = filesys_create(ufile, size);
     lock_release(&fs_lock);
@@ -236,7 +236,7 @@ static int
 sys_remove (const char *ufile) 
 {
   int result = 0;
-  if(ufile != NULL && *name != NULL) {
+  if(ufile != NULL) {
     lock_acquire(&fs_lock);
     result = filesys_remove(ufile);
     lock_release(&fs_lock);
