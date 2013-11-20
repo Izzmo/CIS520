@@ -229,11 +229,13 @@ sys_create (const char *ufile, unsigned initial_size)
 {
   off_t size = (int32_t)initial_size;
   int result = 0;
-  if(ufile != NULL) {
+  if(ufile != NULL && verify_user(ufile)) {
     lock_acquire(&fs_lock);
     result = filesys_create(ufile, size);
     lock_release(&fs_lock);
   }
+  else
+    thread_exit();
   return result;
 }
  
@@ -262,6 +264,8 @@ struct file_descriptor
 static int
 sys_open (const char *ufile) 
 {
+  if(ufile == NULL || !verify_user(ufile)) thread_exit();
+
   char *kfile = copy_in_string (ufile);
   struct file_descriptor *fd;
   int handle = -1;
@@ -452,15 +456,22 @@ sys_tell (int fd)
 static int
 sys_close (int handle) 
 {
-  struct file_descriptor *fd = find_fd_elem_by_fd(handle);
-  int result = 0;
-  if(fd) {
-    lock_acquire(&fs_lock);
-    file_close(fd->file);
-    free(fd);
-    lock_release(&fs_lock);
+  struct thread *cur = thread_current ();
+  struct list_elem *e, *next;
+
+  lock_acquire (&fs_lock);
+
+  for (e = list_begin (&cur->fds); e != list_end (&cur->fds); e = next)
+  {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+    if(fd->handle == handle) {
+      file_close (fd->file);
+      next = list_remove (e);
+    }
+    free (fd);
   }
-  return result;
+
+  lock_release (&fs_lock);
 }
  
 /* On thread exit, close all open files. */

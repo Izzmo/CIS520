@@ -229,11 +229,13 @@ sys_create (const char *ufile, unsigned initial_size)
 {
   off_t size = (int32_t)initial_size;
   int result = 0;
-  if(ufile != NULL) {
+  if(ufile != NULL && verify_user(ufile)) {
     lock_acquire(&fs_lock);
     result = filesys_create(ufile, size);
     lock_release(&fs_lock);
   }
+  else
+    thread_exit();
   return result;
 }
  
@@ -262,6 +264,8 @@ struct file_descriptor
 static int
 sys_open (const char *ufile) 
 {
+  if(ufile == NULL || !verify_user(ufile)) thread_exit();
+
   char *kfile = copy_in_string (ufile);
   struct file_descriptor *fd;
   int handle = -1;
@@ -277,8 +281,9 @@ sys_open (const char *ufile)
           handle = fd->handle = cur->next_handle++;
           list_push_front (&cur->fds, &fd->elem);
         }
-      else 
+      else {
         free (fd);
+      }
       lock_release (&fs_lock);
     }
   
@@ -320,25 +325,39 @@ sys_filesize (int handle)
  
 /* Read system call. */
 static int
-sys_read (int handle, void *udst_, unsigned size)
+sys_read (int fd, void *buffer, unsigned size)
 {
-	uint8_t *udst = udst_;
-	if(handle == STDIN_FILENO){
-		int i;
-		for(i=0; i<size; i++){
-			udst[i] = input_getc();
-		}
-		return size;
-	}
-	if(!verify_user(udst)){
-		thread_exit();
-	}
-	struct file_descriptor *descriptor = lookup_fd(handle);
-	lock_acquire(&fs_lock);
-	int read = file_read(descriptor->file, udst, size);
-	lock_release(&fs_lock);
-	return read;
-
+  struct file * f;
+  unsigned i;
+  int ret;
+  
+  ret = -1; /* Initialize to zero */
+  lock_acquire (&fs_lock);
+  if (fd == STDIN_FILENO) /* stdin */
+    {
+      for (i = 0; i != size; ++i)
+        *(uint8_t *)(buffer + i) = input_getc ();
+      ret = size;
+      goto done;
+    }
+  else if (fd == STDOUT_FILENO) /* stdout */
+      goto done;
+  else if (!is_user_vaddr (buffer) || !is_user_vaddr (buffer + size)) /* bad ptr */
+    {
+      lock_release (&fs_lock);
+      sys_exit (-1);
+    }
+  else
+    {
+      f = find_file_by_fd (fd);
+      if (!f)
+        goto done;
+      ret = file_read (f, buffer, size);
+    }
+    
+done:    
+  lock_release (&fs_lock);
+  return ret;
 }
 
 static struct file *
@@ -369,58 +388,34 @@ find_fd_elem_by_fd (int fd)
 }
 
 static int
-sys_write (int handle, void *usrc_, unsigned size) 
+sys_write (int fd, void *buffer, unsigned length)
 {
-  uint8_t *usrc = usrc_;
-  struct file_descriptor *fd = NULL;
-  int bytes_written = 0;
-
-  /* Lookup up file descriptor. */
-  if (handle != STDOUT_FILENO)
-    fd = lookup_fd (handle);
-
+  struct file * f;
+  int ret;
+  
+  ret = -1;
   lock_acquire (&fs_lock);
-  while (size > 0)
+  if (fd == STDOUT_FILENO) /* stdout */
+    putbuf (buffer, length);
+  else if (fd == STDIN_FILENO) /* stdin */
+    goto done;
+  else if (!is_user_vaddr (buffer) || !is_user_vaddr (buffer + length))
     {
-      /* How much bytes to write to this page? */
-      size_t page_left = PGSIZE - pg_ofs (usrc);
-      size_t write_amt = size < page_left ? size : page_left;
-      off_t retval;
-
-      /* Check that we can touch this user page. */
-      if (!verify_user (usrc))
-        {
-          lock_release (&fs_lock);
-          thread_exit ();
-        }
-
-      /* Do the write. */
-      if (handle == STDOUT_FILENO)
-        {
-          putbuf (usrc, write_amt);
-          retval = write_amt;
-        }
-      else
-        retval = file_write (fd->file, usrc, write_amt);
-      if (retval < 0)
-        {
-          if (bytes_written == 0)
-            bytes_written = -1;
-          break;
-        }
-      bytes_written += retval;
-
-      /* If it was a short write we're done. */
-      if (retval != (off_t) write_amt)
-        break;
-
-      /* Advance. */
-      usrc += retval;
-      size -= retval;
+      lock_release (&fs_lock);
+      sys_exit (-1);
     }
+  else
+    {
+      f = find_file_by_fd (fd);
+      if (!f)
+        goto done;
+        
+      ret = file_write (f, buffer, length);
+    }
+    
+done:
   lock_release (&fs_lock);
- 
-  return bytes_written;
+  return ret;
 }
  
 /* Seek system call. */
@@ -452,15 +447,22 @@ sys_tell (int fd)
 static int
 sys_close (int handle) 
 {
-  struct file_descriptor *fd = find_fd_elem_by_fd(handle);
-  int result = 0;
-  if(fd) {
-    lock_acquire(&fs_lock);
-    file_close(fd->file);
-    free(fd);
-    lock_release(&fs_lock);
+  struct thread *cur = thread_current ();
+  struct list_elem *e, *next;
+
+  lock_acquire (&fs_lock);
+
+  for (e = list_begin (&cur->fds); e != list_end (&cur->fds); e = next)
+  {
+    struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
+    if(fd->handle == handle) {
+      file_close (fd->file);
+      next = list_remove (e);
+    }
+    free (fd);
   }
-  return result;
+
+  lock_release (&fs_lock);
 }
  
 /* On thread exit, close all open files. */
