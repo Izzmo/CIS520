@@ -200,14 +200,20 @@ sys_exit (int exit_code)
 static int
 sys_exec (const char *ufile) 
 {
-	tid_t i;
-	char *f = copy_in_string(ufile);
-
+	if(ufile == NULL || !verify_user(ufile)){
+		thread_exit();
+	}
+	char *file = copy_in_string(ufile);
 	lock_acquire(&fs_lock);
-	i=process_execute(ufile);
+	tid_t child_tid = process_execute(file);
 	lock_release(&fs_lock);
-	palloc_free_page(f);
-	return i;
+	palloc_free_page(file);
+
+	if(child_tid == TID_ERROR){
+		return -1;
+	}else{
+		return child_tid;
+	}
 }
  
 /* Wait system call. */
@@ -236,7 +242,7 @@ static int
 sys_remove (const char *ufile) 
 {
   int result = 0;
-  if(ufile != NULL && *name != NULL) {
+  if(ufile != NULL) {
     lock_acquire(&fs_lock);
     result = filesys_remove(ufile);
     lock_release(&fs_lock);
@@ -314,39 +320,25 @@ sys_filesize (int handle)
  
 /* Read system call. */
 static int
-sys_read (int fd, void *buffer, unsigned size)
+sys_read (int handle, void *udst_, unsigned size)
 {
-  struct file * f;
-  unsigned i;
-  int ret;
-  
-  ret = -1; /* Initialize to zero */
-  lock_acquire (&fs_lock);
-  if (fd == STDIN_FILENO) /* stdin */
-    {
-      for (i = 0; i != size; ++i)
-        *(uint8_t *)(buffer + i) = input_getc ();
-      ret = size;
-      goto done;
-    }
-  else if (fd == STDOUT_FILENO) /* stdout */
-      goto done;
-  else if (!is_user_vaddr (buffer) || !is_user_vaddr (buffer + size)) /* bad ptr */
-    {
-      lock_release (&fs_lock);
-      sys_exit (-1);
-    }
-  else
-    {
-      f = find_file_by_fd (fd);
-      if (!f)
-        goto done;
-      ret = file_read (f, buffer, size);
-    }
-    
-done:    
-  lock_release (&fs_lock);
-  return ret;
+	uint8_t *usrc = usrc_;
+	if(handle == STDIN_FILENO){
+		int i;
+		for(i=0; i<size; i++){
+			udst[i] = input_getc();
+		}
+		return size;
+	}
+	if(!verify_user(udst)){
+		thread_exit();
+	}
+	struct file_descriptor *descriptor = lookup_fd(handle);
+	lock_acquire(&fs_lock);
+	int read = file_read(descriptor->file, udst, size);
+	lock_release(&fs_lock);
+	return read;
+
 }
 
 static struct file *
@@ -377,34 +369,58 @@ find_fd_elem_by_fd (int fd)
 }
 
 static int
-sys_write (int fd, void *buffer, unsigned length)
+sys_write (int handle, void *usrc_, unsigned size) 
 {
-  struct file * f;
-  int ret;
-  
-  ret = -1;
+  uint8_t *usrc = usrc_;
+  struct file_descriptor *fd = NULL;
+  int bytes_written = 0;
+
+  /* Lookup up file descriptor. */
+  if (handle != STDOUT_FILENO)
+    fd = lookup_fd (handle);
+
   lock_acquire (&fs_lock);
-  if (fd == STDOUT_FILENO) /* stdout */
-    putbuf (buffer, length);
-  else if (fd == STDIN_FILENO) /* stdin */
-    goto done;
-  else if (!is_user_vaddr (buffer) || !is_user_vaddr (buffer + length))
+  while (size > 0)
     {
-      lock_release (&fs_lock);
-      sys_exit (-1);
+      /* How much bytes to write to this page? */
+      size_t page_left = PGSIZE - pg_ofs (usrc);
+      size_t write_amt = size < page_left ? size : page_left;
+      off_t retval;
+
+      /* Check that we can touch this user page. */
+      if (!verify_user (usrc))
+        {
+          lock_release (&fs_lock);
+          thread_exit ();
+        }
+
+      /* Do the write. */
+      if (handle == STDOUT_FILENO)
+        {
+          putbuf (usrc, write_amt);
+          retval = write_amt;
+        }
+      else
+        retval = file_write (fd->file, usrc, write_amt);
+      if (retval < 0)
+        {
+          if (bytes_written == 0)
+            bytes_written = -1;
+          break;
+        }
+      bytes_written += retval;
+
+      /* If it was a short write we're done. */
+      if (retval != (off_t) write_amt)
+        break;
+
+      /* Advance. */
+      usrc += retval;
+      size -= retval;
     }
-  else
-    {
-      f = find_file_by_fd (fd);
-      if (!f)
-        goto done;
-        
-      ret = file_write (f, buffer, length);
-    }
-    
-done:
   lock_release (&fs_lock);
-  return ret;
+ 
+  return bytes_written;
 }
  
 /* Seek system call. */
