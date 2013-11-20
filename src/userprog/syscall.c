@@ -200,14 +200,20 @@ sys_exit (int exit_code)
 static int
 sys_exec (const char *ufile) 
 {
-	tid_t i;
-	char *f = copy_in_string(ufile);
-
+	if(ufile == NULL || !verify_user(ufile)){
+		thread_exit();
+	}
+	char *file = copy_in_string(ufile);
 	lock_acquire(&fs_lock);
-	i=process_execute(ufile);
+	tid_t child_tid = process_execute(file);
 	lock_release(&fs_lock);
-	palloc_free_page(f);
-	return i;
+	palloc_free_page(file);
+
+	if(child_tid == TID_ERROR){
+		return -1;
+	}else{
+		return child_tid;
+	}
 }
  
 /* Wait system call. */

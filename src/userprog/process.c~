@@ -73,7 +73,7 @@ start_process (void *exec_)
   struct exec_info *exec = exec_;
   struct intr_frame if_;
   bool success;
-  
+/*  
   int argc = 0;
   char *argv[128], // array of arguments, max size of 128
        *argPtr,
@@ -84,8 +84,8 @@ start_process (void *exec_)
   }
   // copy into stack
   memset(&if_, 0, 16);
-  memcopy(&if_, exec->file_name, 16);
-
+  memcpy(&if_, exec->file_name, 16);
+*/
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -105,10 +105,12 @@ start_process (void *exec_)
   if (success) 
     {
       lock_init (&exec->wait_status->lock);
+      lock_init (&exec->wait_status->wait_lock);
       exec->wait_status->ref_cnt = 2;
       exec->wait_status->tid = thread_current ()->tid;
       exec->wait_status->exit_code = -1;
       sema_init (&exec->wait_status->dead, 0);
+      exec->wait_status->waited = false;
     }
   
   /* Notify parent thread and clean up. */
@@ -166,8 +168,13 @@ struct wait_status *get_wait_status(tid_t t){
 	for(l=list_begin(&c->children); l!=list_end(&c->children);l=list_next(l)){
 		struct wait_status *s;
 		s = list_entry(l,struct wait_status, elem);
-		if(s->tid == t)
+		lock_acquire(&s->wait_lock);
+		if(s->tid == t && s->waited == false){
+			s->waited = true;
+			lock_release(&s->wait_lock);
 			return s;
+		}
+		lock_release(&s->wait_lock);
 	}
 }
 
@@ -543,6 +550,11 @@ static void
 reverse (int argc, char **argv) 
 {
    /* add code */
+   for(;argc>1; argc-=2, argv++){
+	char *tmp = argv[0];
+	argv[0] = argv[argc-1];
+	argv[argc-1] = tmp;
+   }
 
    return;
 }
